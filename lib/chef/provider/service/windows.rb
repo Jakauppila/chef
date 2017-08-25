@@ -45,6 +45,27 @@ class Chef::Provider::Service::Windows < Chef::Provider::Service
   START_PENDING = "start pending"
   STOP_PENDING  = "stop pending"
 
+  #Win32::Service.get_error_control
+  ERROR_IGNORE = "ignore"
+  ERROR_NORMAL = "normal"
+  ERROR_SEVERE = "severe"
+  ERROR_CRITICAL = "critical"
+
+  #Win32::Service.get_action_type
+  ACTION_NONE = "none"
+  ACTION_REBOOT = "reboot"
+  ACTION_RESTART = "restart"
+  ACTION_RUN_COMMAND = "command"
+
+  #Win32::Service.get_service_type
+  KERNEL_DRIVER = "file system driver"
+  FILE_SYSTEM_DRIVER = "kernel driver"
+  WIN32_OWN_PROCESS = "own process"
+  WIN32_SHARE_PROCESS = "share process"
+  INTERACTIVE_PROCESS = "interactive" # There's some logic for this and a OWN/SHARE https://github.com/djberg96/win32-service/blob/ffi/lib/win32/service.rb#L1537
+  DRIVER = "driver"
+  TYPE_ALL = "all"
+
   TIMEOUT = 60
 
   SERVICE_RIGHT = "SeServiceLogonRight"
@@ -52,6 +73,10 @@ class Chef::Provider::Service::Windows < Chef::Provider::Service
   def load_current_resource
     @current_resource = Chef::Resource::WindowsService.new(@new_resource.name)
     @current_resource.service_name(@new_resource.service_name)
+    @current_resource.running(current_state == RUNNING)
+    @current_resource.description(@new_resource.description)
+    @current_resource.display_name(@new_resource.display_name)
+    @current_resource.error_control(@new_resource.error_control)
     @current_resource.running(current_state == RUNNING)
     Chef::Log.debug "#{@new_resource} running: #{@current_resource.running}"
     case current_start_type
@@ -64,17 +89,59 @@ class Chef::Provider::Service::Windows < Chef::Provider::Service
     @current_resource
   end
 
-  def start_service
+  def create_service
     if Win32::Service.exists?(@new_resource.service_name)
-      # reconfiguration is idempotent, so just do it.
+      Chef::Log.debug "#{@new_resource} already exists - nothing to do"
+    else
       new_config = {
         service_name: @new_resource.service_name,
+        display_name: @new_resource.display_name,
+        service_type: @new_resource.service_type,
+        description: @new_resource.description,
+        start_type: @new_resource.start_type,
+        binary_path_name: @new_resource.binary_path_name,
         service_start_name: @new_resource.run_as_user,
         password: @new_resource.run_as_password,
+
       }.reject { |k, v| v.nil? || v.length == 0 }
 
-      Win32::Service.configure(new_config)
-      Chef::Log.info "#{@new_resource} configured with #{new_config.inspect}"
+      if new_config.has_key?(:service_start_name)
+        unless Chef::ReservedNames::Win32::Security.get_account_right(canonicalize_username(new_config[:service_start_name])).include?(SERVICE_RIGHT)
+          grant_service_logon(new_config[:service_start_name])
+        end
+      end
+
+      Win32::Service.new(new_config)
+      Chef::Log.info "#{@new_resource} created with #{new_config.inspect}"
+    end
+  end
+
+  def config_service
+    new_config = {
+      service_name: @new_resource.service_name,
+      display_name: @new_resource.display_name,
+      service_type: @new_resource.service_type,
+      description: @new_resource.description,
+      start_type: @new_resource.start_type,
+      binary_path_name: @new_resource.binary_path_name,
+      service_start_name: @new_resource.run_as_user,
+      password: @new_resource.run_as_password,
+
+    }.reject { |k, v| v.nil? || v.length == 0 }
+
+    if new_config.has_key?(:service_start_name)
+      unless Chef::ReservedNames::Win32::Security.get_account_right(canonicalize_username(new_config[:service_start_name])).include?(SERVICE_RIGHT)
+        grant_service_logon(new_config[:service_start_name])
+      end
+    end
+
+    Win32::Service.configure(new_config)
+    Chef::Log.info "#{@new_resource} created with #{new_config.inspect}"
+
+  end
+
+  def start_service
+    if Win32::Service.exists?(@new_resource.service_name)
 
       if new_config.has_key?(:service_start_name)
         unless Chef::ReservedNames::Win32::Security.get_account_right(canonicalize_username(new_config[:service_start_name])).include?(SERVICE_RIGHT)
@@ -172,6 +239,37 @@ class Chef::Provider::Service::Windows < Chef::Provider::Service
       set_startup_type(:disabled)
     else
       Chef::Log.debug "#{@new_resource} does not exist - nothing to do"
+    end
+  end
+
+  def action_create
+    if Win32::Service.exists?(@new_resource.service_name)
+      converge_by("create service #{@new_resource}") do
+        create_service
+        Chef::Log.info("#{@new_resource} created")
+      end
+    else
+      Chef::Log.debug("#{@new_resource} already exists - nothing to do")
+    end
+    load_new_resource_state
+    @new_resource.enabled(true)
+  end
+
+  def action_config
+    converge_by("configure service #{@new_resource}") do
+      config_service
+      Chef::Log.info("#{@new_resource} configured")
+    end
+  end
+
+  def action_delete
+    if Win32::Service.exists(@new_resource.service_name)
+      converge_by("delete service #{@new_resource}") do
+        delete_service
+        Chef::Log.info("#{@new_resource} deleted")
+      end
+    else
+      Chef::Log.debug("#{@new_resource} does not exist - nothing to do")
     end
   end
 

@@ -28,7 +28,7 @@ class Chef
       provides :windows_service, os: "windows"
       provides :service, os: "windows"
 
-      allowed_actions :configure_startup
+      allowed_actions :create, :delete, :config, :configure_startup
 
       identity_attr :service_name
 
@@ -62,6 +62,39 @@ class Chef
       def run_as_password(arg = nil)
         set_or_return(
           :run_as_password,
+          arg,
+          :kind_of => [ String ]
+        )
+      end
+
+      def binary_path_name(arg = nil)
+        set_or_return(
+          :binary_path_name,
+          arg,
+          :kind_of => [ String ]
+        )
+      end
+
+      def description(arg = nil)
+        set_or_return(
+          :description,
+          arg,
+          :kind_of => [ String ]
+        )
+      end
+
+      def display_name(arg = nil)
+        set_or_return(
+          :display_name,
+          arg,
+          :kind_of => [ String ]
+        )
+      end
+
+      # TODO: Add the equal_to like startup_type to force the values required for that.
+      def service_type(arg = nil)
+        set_or_return(
+          :service_type,
           arg,
           :kind_of => [ String ]
         )
